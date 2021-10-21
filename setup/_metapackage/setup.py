@@ -18,6 +18,7 @@ setuptools.setup(
         'odoo14-addon-account_invoice_mode_weekly',
         'odoo14-addon-account_invoice_payment_retention',
         'odoo14-addon-account_invoice_refund_link',
+        'odoo14-addon-account_invoice_restrict_linked_so',
         'odoo14-addon-account_invoice_search_by_reference',
         'odoo14-addon-account_invoice_section_sale_order',
         'odoo14-addon-account_invoice_tax_required',
@@ -26,6 +27,7 @@ setuptools.setup(
         'odoo14-addon-account_move_original_partner',
         'odoo14-addon-account_move_tier_validation',
         'odoo14-addon-product_supplierinfo_for_customer_invoice',
+        'odoo14-addon-sale_order_invoicing_grouping_criteria',
     ],
     classifiers=[
         'Programming Language :: Python',
