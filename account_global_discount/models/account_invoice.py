@@ -115,14 +115,16 @@ class AccountInvoice(models.Model):
     @api.onchange('partner_id', 'company_id')
     def _onchange_partner_id(self):
         res = super()._onchange_partner_id()
-        if (self.type in ['out_invoice', 'out_refund'] and
-                self.partner_id.customer_global_discount_ids):
+        if (self.type in ['out_invoice', 'out_refund']
+                and self.partner_id.customer_global_discount_ids):
             self.global_discount_ids = (
-                self.partner_id.customer_global_discount_ids)
-        elif (self.type in ['in_refund', 'in_invoice'] and
-                self.partner_id.supplier_global_discount_ids):
+                self.partner_id.customer_global_discount_ids.filtered(
+                    lambda a: a.company_id == self.company_id))
+        elif (self.type in ['in_refund', 'in_invoice']
+                and self.partner_id.supplier_global_discount_ids):
             self.global_discount_ids = (
-                self.partner_id.supplier_global_discount_ids)
+                self.partner_id.supplier_global_discount_ids.filtered(
+                    lambda a: a.company_id == self.company_id))
         return res
 
     @api.onchange('global_discount_ids')
