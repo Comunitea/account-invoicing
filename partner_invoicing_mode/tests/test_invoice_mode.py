@@ -3,7 +3,10 @@
 # License AGPL-3.0 or later (https://www.gnu.org/licenses/agpl.html)
 from unittest import mock
 
-from odoo.tests.common import TransactionCase
+from freezegun import freeze_time
+
+from odoo import fields
+from odoo.tests.common import Form, TransactionCase
 
 from odoo.addons.queue_job.tests.common import trap_jobs
 
@@ -11,7 +14,7 @@ from ..models.res_partner import ResPartner
 from .common import CommonPartnerInvoicingMode
 
 
-class TestInvoiceModeAtShipping(CommonPartnerInvoicingMode, TransactionCase):
+class TestInvoiceMode(CommonPartnerInvoicingMode, TransactionCase):
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
@@ -113,3 +116,71 @@ class TestInvoiceModeAtShipping(CommonPartnerInvoicingMode, TransactionCase):
                 for job in trap.enqueued_jobs:
                     job.perform()
             mock_update.assert_called()
+
+    @freeze_time("2024-03-10")
+    def test_invoicing_standard_cron_invoice_date(self):
+        """
+        - Generate the invoice at day one
+        - Execute the validation job at day two
+        - Check the invoice date is day one
+        """
+        self.so1.payment_term_id = self.pt1.id
+        self._confirm_and_deliver(self.so1)
+        self.assertFalse(self.so1.invoice_ids)
+        with trap_jobs() as trap:
+            self.cron.method_direct_trigger()
+            for job in trap.enqueued_jobs:
+                with trap_jobs() as trap_validate:
+                    job.perform()
+                self.assertEqual(1, len(trap_validate.enqueued_jobs))
+                for validate_job in trap_validate.enqueued_jobs:
+                    with freeze_time("2024-03-11"):
+                        validate_job.perform()
+        self.assertTrue(self.so1.invoice_ids)
+        self.assertEqual(
+            fields.Date.from_string("2024-03-10"), self.so1.invoice_ids.date
+        )
+
+    def test_invoicing_standard_grouping_partner_invoicing(self):
+        # Activate the ability to define a different invoice address
+        # Create a new partner for invoicing
+        self.env.user.groups_id |= self.env.ref(
+            "account.group_delivery_invoice_address"
+        )
+        self.partner_invoice = self.env["res.partner"].create(
+            {"name": "Partner Invoicing"}
+        )
+        self._confirm_and_deliver(self.so1)
+        with Form(self.so2) as so2_form:
+            so2_form.partner_invoice_id = self.partner_invoice
+        self._confirm_and_deliver(self.so2)
+        with trap_jobs() as trap:
+            self.SaleOrder.generate_invoices()
+            for job in trap.enqueued_jobs:
+                job.perform()
+        # Check one invoice is generated
+        self.assertEqual(1, len(self.so2.invoice_ids))
+        self.assertEqual(1, len(self.so1.invoice_ids))
+        # Check the invoice is the same
+        self.assertNotEqual(self.so2.invoice_ids, self.so1.invoice_ids)
+
+    def test_invoicing_standard_grouping_payment_term_invoicing(self):
+        # Activate the ability to define a different payment term
+        self.env.user.groups_id |= self.env.ref(
+            "account.group_delivery_invoice_address"
+        )
+        self._confirm_and_deliver(self.so1)
+        with Form(self.so2) as so2_form:
+            so2_form.payment_term_id = self.env.ref(
+                "account.account_payment_term_21days"
+            )
+        self._confirm_and_deliver(self.so2)
+        with trap_jobs() as trap:
+            self.SaleOrder.generate_invoices()
+            for job in trap.enqueued_jobs:
+                job.perform()
+        # Check one invoice is generated
+        self.assertEqual(1, len(self.so2.invoice_ids))
+        self.assertEqual(1, len(self.so1.invoice_ids))
+        # Check the invoice is the same
+        self.assertNotEqual(self.so2.invoice_ids, self.so1.invoice_ids)

@@ -3,6 +3,7 @@
 # License AGPL-3.0 or later (http://www.gnu.org/licenses/agpl.html)
 from odoo import api, fields, models
 from odoo.fields import Datetime
+from odoo.osv.expression import AND
 
 from odoo.addons.sale.models.sale_order import LOCKED_FIELD_STATES
 
@@ -40,12 +41,20 @@ class SaleOrder(models.Model):
             self.generate_invoices(company_ids)
 
     @api.model
+    def _get_generate_invoices_state_domain(self):
+        return [("invoice_status", "=", "to invoice")]
+
+    @api.model
     def _get_generate_invoices_domain(self, companies, invoicing_mode="standard"):
-        return [
-            ("invoicing_mode", "=", invoicing_mode),
-            ("invoice_status", "=", "to invoice"),
-            ("company_id", "in", companies.ids),
-        ]
+        return AND(
+            [
+                self._get_generate_invoices_state_domain(),
+                [
+                    ("invoicing_mode", "=", invoicing_mode),
+                    ("company_id", "in", companies.ids),
+                ],
+            ]
+        )
 
     @api.model
     def generate_invoices(
@@ -65,27 +74,45 @@ class SaleOrder(models.Model):
         )
         saleorder_groups = self.read_group(
             domain,
-            ["partner_invoice_id"],
-            groupby=self._get_groupby_fields_for_invoicing(),
+            ["partner_invoice_id", "sale_ids:array_agg(id)"],
+            groupby=self._get_invoice_grouping_keys(),
             lazy=False,
         )
         for saleorder_group in saleorder_groups:
-            saleorder_ids = self.search(saleorder_group["__domain"]).ids
-            self.with_delay()._generate_invoices_by_partner(saleorder_ids)
+            self.with_delay()._generate_invoices_by_partner(saleorder_group["sale_ids"])
         companies.write({last_execution_field: Datetime.now()})
         return saleorder_groups
 
     @api.model
-    def _get_groupby_fields_for_invoicing(self):
-        """Returns the sale order fields used to group them into jobs."""
-        return ["partner_invoice_id", "payment_term_id"]
+    def _get_invoice_grouping_keys(self) -> list:
+        """
+        We override the standard (in sale) grouping function in order to
+        add some missing keys. We remove also the partner_id key.
+        """
+        keys = super()._get_invoice_grouping_keys()
+        if "partner_invoice_id" not in keys:
+            keys.append("partner_invoice_id")
+        if "payment_term_id" not in keys:
+            keys.append("payment_term_id")
+        # Removing unwanted keys as we group on invoiced partner
+        if "partner_id" in keys:
+            keys.remove("partner_id")
+        return keys
+
+    def _get_generated_invoices(self, partition):
+        """
+        Hook to get the generated invoices as in some extended modules,
+        those invoices should not be validated yet.
+        """
+        return self._create_invoices(grouped=partition, final=True)
 
     def _generate_invoices_by_partner(self, saleorder_ids):
         """Generate invoices for a group of sale order belonging to a customer."""
+        today = fields.Date.context_today(self)
         sales = (
             self.browse(saleorder_ids)
             .exists()
-            .filtered(lambda r: r.invoice_status == "to invoice")
+            .filtered_domain(self._get_generate_invoices_state_domain())
         )
         if not sales:
             return "No sale order found to invoice ?"
@@ -94,7 +121,10 @@ class SaleOrder(models.Model):
         for partition, sales in sales.partition(
             lambda sale: sale.one_invoice_per_order
         ).items():
-            invoices = sales._create_invoices(grouped=partition, final=True)
+            invoices = sales._get_generated_invoices(partition=partition)
+            # Update invoices date to be sure no long validation (jobs) put
+            # the further day date on invoices.
+            invoices.write({"invoice_date": today})
             # Update each partner next invoice date
             sales.partner_invoice_id._update_next_invoice_date()
             invoice_ids.update(invoices.ids)

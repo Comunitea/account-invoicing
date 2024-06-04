@@ -1,11 +1,13 @@
 # Copyright 2017 Tecnativa - David Vidal
+# Copyright 2023 Simone Rubino - Aion Tech
 # License AGPL-3.0 or later (http://www.gnu.org/licenses/agpl).
 
-from odoo.tests import TransactionCase
 from odoo.tests.common import Form
 
+from odoo.addons.base.tests.common import BaseCommon
 
-class TestInvoiceTripleDiscount(TransactionCase):
+
+class TestInvoiceTripleDiscount(BaseCommon):
     @classmethod
     def setUpClass(cls):
         super(TestInvoiceTripleDiscount, cls).setUpClass()
@@ -16,7 +18,6 @@ class TestInvoiceTripleDiscount(TransactionCase):
         cls.Partner = cls.env["res.partner"]
         cls.Journal = cls.env["account.journal"]
 
-        cls.partner = cls.Partner.create({"name": "test"})
         cls.tax = cls.AccountTax.create(
             {
                 "name": "TAX 15%",
@@ -186,3 +187,34 @@ class TestInvoiceTripleDiscount(TransactionCase):
             line_form.discount3 = 50.0
         invoice_form.save()
         self.assertTrue(invoice._has_discount())
+
+    def test_06_round_discount(self):
+        """Discount value is rounded correctly"""
+        invoice = self.create_simple_invoice(0)
+        invoice_line = invoice.invoice_line_ids[0]
+        invoice_line.discount = 100
+        self.assertEqual(invoice_line.discount, 100)
+
+    def test_07_round_tax_discount(self):
+        """Discount value is rounded correctly when taxes change"""
+        invoice = self.create_simple_invoice(0)
+        invoice_line = invoice.invoice_line_ids[0]
+        invoice_line.discount = 100
+        invoice_line.tax_ids = False
+        self.assertEqual(invoice_line.discount, 100)
+
+    def test_tax_compute_with_lock_date(self):
+        # Check that the tax computation works even if the lock date is set
+        invoice = self.create_simple_invoice(0)
+        invoice_form = Form(invoice)
+        with invoice_form.invoice_line_ids.edit(0) as line_form:
+            line_form.name = "Line Decimals"
+            line_form.quantity = 9950
+            line_form.price_unit = 0.14
+            line_form.discount = 10
+            line_form.discount2 = 20
+        invoice_form.save()
+        invoice_line = invoice.invoice_line_ids[0]
+        invoice.action_post()
+        self.env.user.company_id.fiscalyear_lock_date = "2000-01-01"
+        invoice_line._compute_all_tax()
